@@ -135,7 +135,6 @@ def get_player_count() -> int:
     Prompt for number of players.
     Rules:
       • Must be a whole positive integer (rejects floats, symbols, text).
-      • Maximum 6 players per station.
     """
     while True:
         raw = _read("  Number of players : ")
@@ -150,9 +149,6 @@ def get_player_count() -> int:
             continue
         if value <= 0:
             print("  ! Player count must be at least 1.")
-            continue
-        if value > 6:
-            print("  ! Maximum 6 players per station.")
             continue
         return value
 

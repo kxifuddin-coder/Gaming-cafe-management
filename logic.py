@@ -8,7 +8,7 @@
 import math
 from data import (
     stations, queues, advance_bookings, visit_log,
-    RATES, MENU, GAME_SURCHARGE,
+    RATES, MENU, GAME_SURCHARGE, expired_sessions,
     get_time, set_time, advance_time, fmt_time,
     OPEN_HOUR, CLOSE_HOUR,
 )
@@ -27,17 +27,19 @@ def is_cafe_open(time_min: int) -> bool:
 # 2.  Station availability
 # ─────────────────────────────────────────────────────────────────────────────
 
-def check_availability(station_type: str, start_min: int, duration_min: float) -> int | None:
+def get_available_units(station_type: str, start_min: int, duration_min: float) -> list[int]:
     """
-    Find a free unit of *station_type* for the window [start_min, start_min + duration_min].
-    Returns the unit_id of the first free unit found, or None if all are occupied.
+    Find all free units of *station_type* for the window [start_min, start_min + duration_min].
+    Returns a list of unit_ids that are free.
     """
     end_min = start_min + duration_min
+    available = []
     for uid, unit in stations.items():
         if unit["type"] != station_type:
             continue
         if not unit["occupied"]:
-            return uid
+            available.append(uid)
+            continue
         # Occupied: check whether its current session overlaps our window
         s = unit["session_start"]
         e = unit["session_end"]
@@ -47,8 +49,16 @@ def check_availability(station_type: str, start_min: int, duration_min: float) -
         # No overlap if our window starts at or after the unit's end,
         # or our window ends at or before the unit's start
         if start_min >= e or end_min <= s:
-            return uid   # Free during our window
-    return None
+            available.append(uid)
+    return available
+
+def check_availability(station_type: str, start_min: int, duration_min: float) -> int | None:
+    """
+    Find a free unit of *station_type* for the window [start_min, start_min + duration_min].
+    Returns the unit_id of the first free unit found, or None if all are occupied.
+    """
+    units = get_available_units(station_type, start_min, duration_min)
+    return units[0] if units else None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -117,6 +127,7 @@ def release_station(unit_id: int) -> None:
             "duration_hrs":     1.0,           # placeholder; real duration tracked by virtual clock
             "player_count":     1,
             "scheduled_start":  get_time(),
+            "snacks":           [],
         }
         allocate_station(unit_id, walk_in_booking)
         print(f"\n  ► Queue: {next_customer} has been moved from the waiting queue to {station_type} unit {unit_id}.")
@@ -199,11 +210,19 @@ def skip_time(minutes: int) -> None:
     for uid, unit in stations.items():
         if unit["occupied"] and unit["session_end"] is not None and unit["session_end"] <= now:
             bk = unit["current_booking"]
-            customer = bk["customer_name"] if bk else "Unknown"
-            duration_actual = unit["session_end"] - unit["session_start"]
-            end_str = fmt_time(int(unit["session_end"]))
-            utype   = unit["type"]
-            print(f"\n  ⏰ Session auto-closed: {customer} on {utype} unit {uid}  (ended {end_str}).")
+            if bk:
+                customer = bk["customer_name"]
+                duration_actual = unit["session_end"] - unit["session_start"]
+                end_str = fmt_time(int(unit["session_end"]))
+                utype   = unit["type"]
+                print(f"\n  ⏰ Session auto-closed: {customer} on {utype} unit {uid}  (ended {end_str}).")
+                
+                exp_bk = dict(bk)
+                exp_bk["unit_id"] = uid
+                exp_bk["actual_dur_min"] = duration_actual
+                exp_bk["session_start"] = unit["session_start"]
+                exp_bk["session_end"] = unit["session_end"]
+                expired_sessions.append(exp_bk)
             release_station(uid)
 
     # Activate advance bookings that are now due

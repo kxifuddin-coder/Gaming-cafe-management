@@ -27,6 +27,15 @@ STATION_LABELS: dict[int, str] = {
     5: "ARCADE",
 }
 
+# ── Station max capacities ────────────────────────────────────────────────────
+STATION_CAPACITIES: dict[str, int] = {
+    "PS3": 4,
+    "PS4": 4,
+    "PS5": 4,
+    "RACING SIMULATOR": 1,
+    "ARCADE": 2,
+}
+
 # ── Snack / drink menu (Rs) ───────────────────────────────────────────────────
 MENU: dict[str, int] = {
     "COLD DRINK": 40,
@@ -93,6 +102,10 @@ queues: dict[str, list[str]] = {key: [] for key in RATES}
 # ── Advance bookings not yet started ─────────────────────────────────────────
 # List of booking dicts, kept sorted by scheduled_start ascending.
 advance_bookings: list[dict] = []
+
+# ── Expired sessions awaiting billing ─────────────────────────────────────────
+# List of dicts, each representing an auto-closed session that needs to be billed
+expired_sessions: list[dict] = []
 
 # ── Customer visit log ────────────────────────────────────────────────────────
 # Maps customer name (case-normalised) -> number of completed visits

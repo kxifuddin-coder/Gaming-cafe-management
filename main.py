@@ -4,7 +4,7 @@
 
 from data import (
     RATES, MENU, MENU_LABELS, GAME_SURCHARGE, stations, queues,
-    advance_bookings, visit_log,
+    advance_bookings, visit_log, STATION_CAPACITIES, expired_sessions,
     get_time, fmt_time,
     OPEN_HOUR, CLOSE_HOUR,
 )
@@ -15,7 +15,7 @@ from inputs import (
 )
 from logic import (
     is_cafe_open,
-    check_availability, allocate_station, add_to_queue,
+    check_availability, get_available_units, allocate_station, add_to_queue,
     release_station, serve_next_in_queue,
     register_advance_booking, activate_due_bookings,
     skip_time,
@@ -73,22 +73,21 @@ def display_status() -> None:
 def display_main_menu() -> str:
     """
     Show the main action menu and return the chosen option.
-    '1' new customer  '2' end active session  '3' skip time
-    '4' view status   'q' quit
     """
     print()
     print("  ── Main menu ──────────────────────────────")
     print("    1. New customer (booking or walk-in)")
     print("    2. End active session & print bill")
     print("    3. Skip time (advance virtual clock)")
-    print("    4. View station status")
+    print("    4. Add snacks to active session")
+    print("    5. View expired sessions & print bills")
     print("    q. Quit")
     print("  ───────────────────────────────────────────")
     while True:
         choice = input("  Select option : ").strip().lower()
-        if choice in ("1", "2", "3", "4", "q"):
+        if choice in ("1", "2", "3", "4", "5", "q"):
             return choice
-        print("  ! Please enter 1, 2, 3, 4 or q.")
+        print("  ! Please enter 1, 2, 3, 4, 5 or q.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -137,30 +136,82 @@ def run_new_customer() -> None:
         "duration_hrs":    duration_hrs,
         "player_count":    player_count,
         "scheduled_start": scheduled_start,
+        "snacks":          [],
     }
 
+    import math
     # ── Availability check ────────────────────────────────────────────────────
-    unit_id = check_availability(station_type, scheduled_start, duration_min)
+    capacity = STATION_CAPACITIES.get(station_type, 4)
+    units_needed = math.ceil(player_count / capacity)
+    available_units = get_available_units(station_type, scheduled_start, duration_min)
 
-    if unit_id is None:
-        position = add_to_queue(customer_name, station_type)
-        print(f"\n  ! No {station_type} available right now.")
-        print(f"  {customer_name} added to the waiting queue — position {position}.")
-        return
+    units_to_book = 0
+
+    if player_count > capacity:
+        if len(available_units) >= units_needed:
+            print(f"\n  ! {station_type} supports only {capacity} people per unit.")
+            print(f"  {len(available_units)} units are available. You need {units_needed} units.")
+            while True:
+                ans = input(f"  [B]ook {units_needed} units, [W]ait in queue, or [C]ancel? ").strip().upper()
+                if ans in ("B", "W", "C"): break
+            if ans == "B":
+                units_to_book = units_needed
+            elif ans == "W":
+                position = add_to_queue(customer_name, station_type)
+                print(f"  {customer_name} added to the waiting queue — position {position}.")
+                return
+            else:
+                return
+        elif len(available_units) > 0:
+            print(f"\n  ! {station_type} supports only {capacity} people per unit.")
+            print(f"  Only {len(available_units)} unit(s) available.")
+            max_people = len(available_units) * capacity
+            while True:
+                ans = input(f"  [P]roceed with {len(available_units)} unit(s) for {max_people} people, [W]ait in queue, or [C]ancel? ").strip().upper()
+                if ans in ("P", "W", "C"): break
+            if ans == "P":
+                units_to_book = len(available_units)
+                booking["player_count"] = max_people
+            elif ans == "W":
+                position = add_to_queue(customer_name, station_type)
+                print(f"  {customer_name} added to the waiting queue — position {position}.")
+                return
+            else:
+                return
+        else:
+            print(f"\n  ! No {station_type} available right now.")
+            while True:
+                ans = input("  [W]ait in queue or [C]ancel? ").strip().upper()
+                if ans in ("W", "C"): break
+            if ans == "W":
+                position = add_to_queue(customer_name, station_type)
+                print(f"  {customer_name} added to the waiting queue — position {position}.")
+            return
+    else:
+        if len(available_units) >= 1:
+            units_to_book = 1
+        else:
+            print(f"\n  ! No {station_type} available right now.")
+            position = add_to_queue(customer_name, station_type)
+            print(f"  {customer_name} added to the waiting queue — position {position}.")
+            return
 
     # ── Allocate ──────────────────────────────────────────────────────────────
-    allocate_station(unit_id, booking)
+    for uid in available_units[:units_to_book]:
+        b = dict(booking)
+        b["snacks"] = []
+        allocate_station(uid, b)
+        if booking_type == "B":
+            register_advance_booking(b)
+            print(f"  ✓ Advance booking confirmed: {customer_name} → {station_type} unit {uid}")
+        else:
+            print(f"  ✓ Walk-in allocated: {customer_name} → {station_type} unit {uid}")
 
-    if booking_type == "B":
-        register_advance_booking(booking)
-        print(f"\n  ✓ Advance booking confirmed:")
-        print(f"    {customer_name} → {station_type} unit {unit_id}")
-        print(f"    Start : {fmt_time(scheduled_start)}   End : {fmt_time(int(scheduled_start + duration_min))}")
-    else:
-        print(f"\n  ✓ Walk-in allocated:")
-        print(f"    {customer_name} → {station_type} unit {unit_id}")
-        print(f"    Start : {fmt_time(scheduled_start)}   End : {fmt_time(int(scheduled_start + duration_min))}")
+    if booking_type != "B":
+        print(f"  Start : {fmt_time(scheduled_start)}   End : {fmt_time(int(scheduled_start + duration_min))}")
         print(f"  (Use option 2 from the main menu when the customer finishes playing.)")
+    else:
+        print(f"  Start : {fmt_time(scheduled_start)}   End : {fmt_time(int(scheduled_start + duration_min))}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -222,7 +273,8 @@ def end_session() -> None:
     # Snack order
     print()
     print("  Add snacks / drinks to the customer's tab:")
-    food_items = get_snack_order(MENU, MENU_LABELS)
+    new_snacks = get_snack_order(MENU, MENU_LABELS)
+    food_items = bk.get("snacks", []) + new_snacks
 
     # Billing
     gaming_charge = calculate_gaming_charge(station_type, actual_dur_min)
@@ -236,6 +288,87 @@ def end_session() -> None:
 
     increment_visit_count(customer_name)
     release_station(unit_id)
+
+    print_bill(
+        customer_name  = customer_name,
+        station_type   = station_type,
+        duration_min   = actual_dur_min,
+        gaming_charge  = gaming_charge,
+        surcharge      = surcharge,
+        food_items     = food_items,
+        food_total     = food_total,
+        discount       = discount_amt,
+        final_total    = final_total,
+    )
+
+    visits_now = visit_log.get(customer_name.upper(), 0)
+    remaining  = max(0, 5 - visits_now)
+    if remaining > 0:
+        print(f"  ℹ  {customer_name} has {visits_now} visit(s). {remaining} more to unlock loyalty discount.")
+    else:
+        print(f"  ℹ  {customer_name} is a loyalty member ({visits_now} visits). 10% discount applied.")
+
+
+def add_snacks_to_session() -> None:
+    _header("Add Snacks")
+    unit_id = _select_occupied_unit()
+    if unit_id is None:
+        return
+
+    unit = stations[unit_id]
+    bk = unit["current_booking"]
+    print(f"\n  Adding snacks for {bk['customer_name']} on {unit['type']} unit {unit_id}.")
+
+    new_snacks = get_snack_order(MENU, MENU_LABELS)
+    if new_snacks:
+        bk.setdefault("snacks", []).extend(new_snacks)
+        print("  ✓ Snacks added to session.")
+
+def bill_expired_session() -> None:
+    _header("Expired Sessions")
+    if not expired_sessions:
+        print("\n  ! No expired sessions to bill.")
+        return
+
+    print()
+    print("  Expired sessions:")
+    for i, bk in enumerate(expired_sessions, 1):
+        cust = bk["customer_name"]
+        uid = bk["unit_id"]
+        stype = bk["station_type"]
+        end = fmt_time(int(bk["session_end"]))
+        print(f"    {i}. Unit {uid} | {stype:<16} | {cust} (ended at {end})")
+
+    while True:
+        raw = input(f"  Select session to bill [1-{len(expired_sessions)}] : ").strip()
+        if raw.isdigit() and 1 <= int(raw) <= len(expired_sessions):
+            idx = int(raw) - 1
+            break
+        print(f"  ! Please enter a number between 1 and {len(expired_sessions)}.")
+
+    bk = expired_sessions.pop(idx)
+    customer_name = bk["customer_name"]
+    station_type = bk["station_type"]
+    game_category = bk["game_category"]
+    actual_dur_min = bk["actual_dur_min"]
+
+    print(f"\n  Billing expired session for {customer_name} on {station_type} unit {bk['unit_id']}.")
+
+    print()
+    print("  Add any final snacks / drinks before checkout:")
+    new_snacks = get_snack_order(MENU, MENU_LABELS)
+    food_items = bk.get("snacks", []) + new_snacks
+
+    gaming_charge = calculate_gaming_charge(station_type, actual_dur_min)
+    surcharge     = calculate_game_surcharge(game_category)
+    food_total    = calculate_food_total(food_items)
+    subtotal      = gaming_charge + surcharge + food_total
+
+    discounted    = apply_loyalty_discount(customer_name, subtotal)
+    discount_amt  = subtotal - discounted
+    final_total   = discounted
+
+    increment_visit_count(customer_name)
 
     print_bill(
         customer_name  = customer_name,
@@ -292,7 +425,9 @@ def main() -> None:
         elif choice == "3":
             handle_skip_time()
         elif choice == "4":
-            display_status()
+            add_snacks_to_session()
+        elif choice == "5":
+            bill_expired_session()
         elif choice == "q":
             print()
             print("  Session ended. Goodbye!")
@@ -301,4 +436,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()a
+    main()
