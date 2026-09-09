@@ -4,7 +4,7 @@
 
 from data import (
     RATES, MENU, MENU_LABELS, GAME_SURCHARGE, stations, queues,
-    advance_bookings, visit_log, STATION_CAPACITIES, expired_sessions,
+    advance_bookings, loyalty_hours, STATION_CAPACITIES, expired_sessions,
     get_time, fmt_time,
     OPEN_HOUR, CLOSE_HOUR,
 )
@@ -21,7 +21,7 @@ from logic import (
     skip_time,
     calculate_gaming_charge, calculate_game_surcharge,
     calculate_food_total, apply_loyalty_discount,
-    increment_visit_count, print_bill,
+    add_loyalty_hours, print_bill,
 )
 
 
@@ -197,14 +197,20 @@ def run_new_customer() -> None:
             return
 
     # ── Allocate ──────────────────────────────────────────────────────────────
+    import uuid
+    group_id = str(uuid.uuid4())
+    
     for uid in available_units[:units_to_book]:
         b = dict(booking)
         b["snacks"] = []
-        allocate_station(uid, b)
+        b["unit_id"] = uid
+        b["group_id"] = group_id
+        
         if booking_type == "B":
             register_advance_booking(b)
             print(f"  ✓ Advance booking confirmed: {customer_name} → {station_type} unit {uid}")
         else:
+            allocate_station(uid, b)
             print(f"  ✓ Walk-in allocated: {customer_name} → {station_type} unit {uid}")
 
     if booking_type != "B":
@@ -256,57 +262,76 @@ def end_session() -> None:
     unit    = stations[unit_id]
     bk      = unit["current_booking"]
     now     = get_time()
+    group_id = bk.get("group_id")
 
-    customer_name  = bk["customer_name"]
-    station_type   = bk["station_type"]
-    game_category  = bk["game_category"]
-    session_start  = unit["session_start"]
-    session_end    = unit["session_end"]
+    units_to_checkout = [unit_id]
+    if group_id:
+        active_group_units = [u for u, un in stations.items() if un["occupied"] and un["current_booking"] and un["current_booking"].get("group_id") == group_id]
+        if len(active_group_units) > 1:
+            ans = input(f"  This unit is part of a group ({len(active_group_units)} active units). Checkout entire group together? [Y/N] : ").strip().upper()
+            if ans == "Y":
+                units_to_checkout = active_group_units
 
-    # Actual duration: use min(now, declared_end) so we don't overbill
-    actual_end_min = min(now, session_end) if session_end else now
-    actual_dur_min = max(1.0, actual_end_min - session_start)
-
-    print(f"\n  Ending session for {customer_name} on {station_type} unit {unit_id}.")
-    print(f"  Actual duration: {int(actual_dur_min // 60)}h {int(actual_dur_min % 60):02d}m")
+    customer_name = bk["customer_name"]
+    print(f"\n  Ending session for {customer_name} ({len(units_to_checkout)} unit(s)).")
 
     # Snack order
     print()
-    print("  Add snacks / drinks to the customer's tab:")
+    print("  Add snacks / drinks to the group's tab:")
     new_snacks = get_snack_order(MENU, MENU_LABELS)
-    food_items = bk.get("snacks", []) + new_snacks
 
-    # Billing
-    gaming_charge = calculate_gaming_charge(station_type, actual_dur_min)
-    surcharge     = calculate_game_surcharge(game_category)
-    food_total    = calculate_food_total(food_items)
-    subtotal      = gaming_charge + surcharge + food_total
+    total_gaming_charge = 0.0
+    total_surcharge = 0.0
+    all_food_items = list(new_snacks)
+    max_dur_min = 0.0
+    
+    station_types = set()
 
-    discounted    = apply_loyalty_discount(customer_name, subtotal)
-    discount_amt  = subtotal - discounted
-    final_total   = discounted
+    for uid in units_to_checkout:
+        u = stations[uid]
+        b = u["current_booking"]
+        actual_end_min = min(now, u["session_end"]) if u["session_end"] else now
+        actual_dur_min = max(1.0, actual_end_min - u["session_start"])
+        max_dur_min = max(max_dur_min, actual_dur_min)
+        station_types.add(b["station_type"])
 
-    increment_visit_count(customer_name)
-    release_station(unit_id)
+        total_gaming_charge += calculate_gaming_charge(b["station_type"], actual_dur_min)
+        total_surcharge += calculate_game_surcharge(b["game_category"])
+        all_food_items.extend(b.get("snacks", []))
+
+        release_station(uid)
+
+    food_total = calculate_food_total(all_food_items)
+    subtotal = total_gaming_charge + total_surcharge + food_total
+
+    discounted = apply_loyalty_discount(customer_name, subtotal)
+    discount_amt = subtotal - discounted
+    final_total = discounted
+
+    # Add max duration of this group session as hours played
+    add_loyalty_hours(customer_name, max_dur_min / 60.0)
+
+    station_type_str = list(station_types)[0] if len(station_types) == 1 else "Multiple Units"
 
     print_bill(
         customer_name  = customer_name,
-        station_type   = station_type,
-        duration_min   = actual_dur_min,
-        gaming_charge  = gaming_charge,
-        surcharge      = surcharge,
-        food_items     = food_items,
+        station_type   = station_type_str,
+        duration_min   = max_dur_min,
+        gaming_charge  = total_gaming_charge,
+        surcharge      = total_surcharge,
+        food_items     = all_food_items,
         food_total     = food_total,
         discount       = discount_amt,
         final_total    = final_total,
     )
 
-    visits_now = visit_log.get(customer_name.upper(), 0)
-    remaining  = max(0, 5 - visits_now)
+    from data import loyalty_hours
+    hours_now = loyalty_hours.get(customer_name.upper(), 0.0)
+    remaining = max(0.0, 10.0 - hours_now)
     if remaining > 0:
-        print(f"  ℹ  {customer_name} has {visits_now} visit(s). {remaining} more to unlock loyalty discount.")
+        print(f"  ℹ  {customer_name} has played {hours_now:.1f} hours. {remaining:.1f} more hours to unlock loyalty discount.")
     else:
-        print(f"  ℹ  {customer_name} is a loyalty member ({visits_now} visits). 10% discount applied.")
+        print(f"  ℹ  {customer_name} is a loyalty member ({hours_now:.1f} hours). 10% discount applied.")
 
 
 def add_snacks_to_session() -> None:
@@ -348,46 +373,70 @@ def bill_expired_session() -> None:
 
     bk = expired_sessions.pop(idx)
     customer_name = bk["customer_name"]
-    station_type = bk["station_type"]
-    game_category = bk["game_category"]
-    actual_dur_min = bk["actual_dur_min"]
+    group_id = bk.get("group_id")
 
-    print(f"\n  Billing expired session for {customer_name} on {station_type} unit {bk['unit_id']}.")
+    bks_to_checkout = [bk]
+    if group_id:
+        group_bks = [b for b in expired_sessions if b.get("group_id") == group_id]
+        if len(group_bks) >= 1:
+            ans = input(f"  This session is part of a group ({len(group_bks) + 1} expired sessions). Checkout entire group together? [Y/N] : ").strip().upper()
+            if ans == "Y":
+                bks_to_checkout.extend(group_bks)
+                for b in group_bks:
+                    expired_sessions.remove(b)
+
+    print(f"\n  Billing expired session for {customer_name} ({len(bks_to_checkout)} unit(s)).")
 
     print()
     print("  Add any final snacks / drinks before checkout:")
     new_snacks = get_snack_order(MENU, MENU_LABELS)
-    food_items = bk.get("snacks", []) + new_snacks
 
-    gaming_charge = calculate_gaming_charge(station_type, actual_dur_min)
-    surcharge     = calculate_game_surcharge(game_category)
-    food_total    = calculate_food_total(food_items)
-    subtotal      = gaming_charge + surcharge + food_total
+    total_gaming_charge = 0.0
+    total_surcharge = 0.0
+    all_food_items = list(new_snacks)
+    max_dur_min = 0.0
+    station_types = set()
 
-    discounted    = apply_loyalty_discount(customer_name, subtotal)
-    discount_amt  = subtotal - discounted
-    final_total   = discounted
+    for b in bks_to_checkout:
+        actual_dur_min = b["actual_dur_min"]
+        max_dur_min = max(max_dur_min, actual_dur_min)
+        station_types.add(b["station_type"])
 
-    increment_visit_count(customer_name)
+        total_gaming_charge += calculate_gaming_charge(b["station_type"], actual_dur_min)
+        total_surcharge += calculate_game_surcharge(b["game_category"])
+        all_food_items.extend(b.get("snacks", []))
+
+    food_total = calculate_food_total(all_food_items)
+    subtotal = total_gaming_charge + total_surcharge + food_total
+
+    discounted = apply_loyalty_discount(customer_name, subtotal)
+    discount_amt = subtotal - discounted
+    final_total = discounted
+
+    # Add max duration of this group session as hours played
+    add_loyalty_hours(customer_name, max_dur_min / 60.0)
+
+    station_type_str = list(station_types)[0] if len(station_types) == 1 else "Multiple Units"
 
     print_bill(
         customer_name  = customer_name,
-        station_type   = station_type,
-        duration_min   = actual_dur_min,
-        gaming_charge  = gaming_charge,
-        surcharge      = surcharge,
-        food_items     = food_items,
+        station_type   = station_type_str,
+        duration_min   = max_dur_min,
+        gaming_charge  = total_gaming_charge,
+        surcharge      = total_surcharge,
+        food_items     = all_food_items,
         food_total     = food_total,
         discount       = discount_amt,
         final_total    = final_total,
     )
 
-    visits_now = visit_log.get(customer_name.upper(), 0)
-    remaining  = max(0, 5 - visits_now)
+    from data import loyalty_hours
+    hours_now = loyalty_hours.get(customer_name.upper(), 0.0)
+    remaining = max(0.0, 10.0 - hours_now)
     if remaining > 0:
-        print(f"  ℹ  {customer_name} has {visits_now} visit(s). {remaining} more to unlock loyalty discount.")
+        print(f"  ℹ  {customer_name} has played {hours_now:.1f} hours. {remaining:.1f} more hours to unlock loyalty discount.")
     else:
-        print(f"  ℹ  {customer_name} is a loyalty member ({visits_now} visits). 10% discount applied.")
+        print(f"  ℹ  {customer_name} is a loyalty member ({hours_now:.1f} hours). 10% discount applied.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -415,6 +464,22 @@ def main() -> None:
     display_welcome()
 
     while True:
+        if get_time() >= CLOSE_HOUR * 60:
+            print("\n" + "═" * 60)
+            print("  🌙 THE CAFE HAS REACHED CLOSING TIME (22:00).")
+            print("  All active sessions have been forcefully closed.")
+            print("  All unbilled expired sessions and queues will be erased.")
+            print("═" * 60)
+            ans = input("\n  Press Enter to start a new day, or 'q' to quit: ").strip().lower()
+            if ans == 'q':
+                print("\n  Session ended. Goodbye!\n")
+                break
+            else:
+                from logic import start_new_day
+                start_new_day()
+                print("\n  🌅 A new day has started. Welcome!\n")
+                continue
+
         display_status()
         choice = display_main_menu()
 

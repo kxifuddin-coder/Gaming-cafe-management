@@ -107,9 +107,9 @@ advance_bookings: list[dict] = []
 # List of dicts, each representing an auto-closed session that needs to be billed
 expired_sessions: list[dict] = []
 
-# ── Customer visit log ────────────────────────────────────────────────────────
-# Maps customer name (case-normalised) -> number of completed visits
-visit_log: dict[str, int] = {}
+# ── Customer loyalty log ──────────────────────────────────────────────────────
+# Maps customer name (case-normalised) -> total hours played
+loyalty_hours: dict[str, float] = {}
 
 # ── Virtual clock ─────────────────────────────────────────────────────────────
 # Time is stored as minutes since midnight so arithmetic is trivial.

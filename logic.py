@@ -7,7 +7,7 @@
 
 import math
 from data import (
-    stations, queues, advance_bookings, visit_log,
+    stations, queues, advance_bookings, loyalty_hours,
     RATES, MENU, GAME_SURCHARGE, expired_sessions,
     get_time, set_time, advance_time, fmt_time,
     OPEN_HOUR, CLOSE_HOUR,
@@ -37,18 +37,26 @@ def get_available_units(station_type: str, start_min: int, duration_min: float) 
     for uid, unit in stations.items():
         if unit["type"] != station_type:
             continue
-        if not unit["occupied"]:
-            available.append(uid)
-            continue
-        # Occupied: check whether its current session overlaps our window
-        s = unit["session_start"]
-        e = unit["session_end"]
-        if s is None or e is None:
-            # Indefinite occupation (walk-in with no declared end) — treat as busy
-            continue
-        # No overlap if our window starts at or after the unit's end,
-        # or our window ends at or before the unit's start
-        if start_min >= e or end_min <= s:
+            
+        overlap = False
+        if unit["occupied"]:
+            s = unit["session_start"]
+            e = unit["session_end"]
+            if s is None or e is None:
+                overlap = True
+            elif not (start_min >= e or end_min <= s):
+                overlap = True
+                
+        # Check advance bookings for this unit
+        for bk in advance_bookings:
+            if bk.get("unit_id") == uid:
+                bk_s = bk["scheduled_start"]
+                bk_e = bk_s + bk["duration_hrs"] * 60
+                if not (start_min >= bk_e or end_min <= bk_s):
+                    overlap = True
+                    break
+                    
+        if not overlap:
             available.append(uid)
     return available
 
@@ -65,17 +73,15 @@ def check_availability(station_type: str, start_min: int, duration_min: float) -
 # 3.  Booking priority check
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _upcoming_booking(station_type: str, within_minutes: int = 30) -> dict | None:
+def _upcoming_booking(unit_id: int, within_minutes: int = 30) -> dict | None:
     """
-    Return the earliest advance booking for *station_type* due to start
+    Return the earliest advance booking for *unit_id* due to start
     within *within_minutes* of the current virtual clock, or None.
     advance_bookings is kept sorted by scheduled_start ascending.
     """
     now = get_time()
     for bk in advance_bookings:
-        if bk["station_type"] != station_type:
-            continue
-        if now <= bk["scheduled_start"] <= now + within_minutes:
+        if bk.get("unit_id") == unit_id and now <= bk["scheduled_start"] <= now + within_minutes:
             return bk
     return None
 
@@ -100,9 +106,8 @@ def allocate_station(unit_id: int, booking: dict) -> None:
 
 def release_station(unit_id: int) -> None:
     """
-    Free *unit_id*.  After clearing, honour advance-booking priority:
-    if an advance booking is due within 30 minutes for this station type,
-    hold the unit for it.  Otherwise hand it to the next walk-in in the queue.
+    Free *unit_id*. After clearing, notify if there is an upcoming queue.
+    We do NOT automatically start the clock for queued customers anymore.
     """
     unit = stations[unit_id]
     station_type = unit["type"]
@@ -111,26 +116,14 @@ def release_station(unit_id: int) -> None:
     unit["session_start"]   = None
     unit["session_end"]     = None
 
-    # Check priority: advance booking due within 30 minutes?
-    upcoming = _upcoming_booking(station_type, within_minutes=30)
+    upcoming = _upcoming_booking(unit_id, within_minutes=30)
     if upcoming:
-        # Hold the unit — do not hand it to walk-ins
+        print(f"\n  ℹ Unit {unit_id} is reserved for advance booking: {upcoming['customer_name']}.")
         return
 
-    # No priority booking — serve next walk-in if one is waiting
     if queues.get(station_type):
-        next_customer = queues[station_type].pop(0)
-        walk_in_booking = {
-            "customer_name":    next_customer,
-            "station_type":     station_type,
-            "game_category":    "STANDARD",   # walk-in default; will be updated by run_session
-            "duration_hrs":     1.0,           # placeholder; real duration tracked by virtual clock
-            "player_count":     1,
-            "scheduled_start":  get_time(),
-            "snacks":           [],
-        }
-        allocate_station(unit_id, walk_in_booking)
-        print(f"\n  ► Queue: {next_customer} has been moved from the waiting queue to {station_type} unit {unit_id}.")
+        next_customer = queues[station_type][0]
+        print(f"\n  ► Unit {unit_id} ({station_type}) is now free. Queue next: {next_customer}. Operator should confirm and allocate from main menu.")
 
 
 def add_to_queue(customer_name: str, station_type: str) -> int:
@@ -146,18 +139,10 @@ def add_to_queue(customer_name: str, station_type: str) -> int:
 
 def serve_next_in_queue(station_type: str) -> None:
     """
-    If a unit of *station_type* is free and the queue is non-empty
-    (and no advance booking is imminent), allocate it to the next walk-in.
+    Helper function (if used) to find next free station and allocate.
+    Now just tells the operator to handle it.
     """
-    if not queues.get(station_type):
-        return
-    upcoming = _upcoming_booking(station_type, within_minutes=30)
-    if upcoming:
-        return
-    for uid, unit in stations.items():
-        if unit["type"] == station_type and not unit["occupied"]:
-            release_station(uid)   # release_station handles queue dequeue
-            return
+    pass
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -179,12 +164,13 @@ def activate_due_bookings() -> None:
     still_pending = []
     for bk in advance_bookings:
         if bk["scheduled_start"] <= now:
-            uid = check_availability(bk["station_type"], bk["scheduled_start"], bk["duration_hrs"] * 60)
-            if uid is not None:
+            uid = bk.get("unit_id")
+            unit = stations.get(uid)
+            if unit and not unit["occupied"]:
                 allocate_station(uid, bk)
-                print(f"\n  ► Advance booking activated: {bk['customer_name']} → {bk['station_type']} unit {uid} at {fmt_time(bk['scheduled_start'])}.")
+                print(f"\n  ► Advance booking auto-started: {bk['customer_name']} → {bk['station_type']} unit {uid} at {fmt_time(bk['scheduled_start'])}.")
             else:
-                # No unit available (shouldn't happen if booked correctly, but guard anyway)
+                # Still occupied by previous session? Leave it pending to start later
                 still_pending.append(bk)
         else:
             still_pending.append(bk)
@@ -254,19 +240,19 @@ def calculate_food_total(items: list[tuple[str, int]]) -> float:
 
 def apply_loyalty_discount(customer_name: str, subtotal: float) -> float:
     """
-    Apply 10% loyalty discount if the customer has ≥ 5 completed visits.
+    Apply 10% loyalty discount if the customer has >= 10 hours played.
     Returns the discounted total rounded to the nearest rupee.
     """
-    visits = visit_log.get(customer_name.upper(), 0)
-    if visits >= 5:
+    hours = loyalty_hours.get(customer_name.upper(), 0.0)
+    if hours >= 10.0:
         return round(subtotal * 0.90)
     return subtotal
 
 
-def increment_visit_count(customer_name: str) -> None:
-    """Increment completed-visit counter.  Creates the entry at 0 if new."""
+def add_loyalty_hours(customer_name: str, duration_hrs: float) -> None:
+    """Add hours to the customer's loyalty total."""
     key = customer_name.upper()
-    visit_log[key] = visit_log.get(key, 0) + 1
+    loyalty_hours[key] = loyalty_hours.get(key, 0.0) + duration_hrs
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -325,3 +311,27 @@ def print_bill(
     print(f"  {'TOTAL DUE':<22} Rs {final_total:>6.0f}")
     print("  " + "═" * W)
     print()
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 9.  End of Day / New Day
+# ─────────────────────────────────────────────────────────────────────────────
+
+def start_new_day() -> None:
+    """Reset all daily tracking data and reset the virtual clock to opening time."""
+    # Stations
+    for uid, unit in stations.items():
+        unit["occupied"] = False
+        unit["current_booking"] = None
+        unit["session_start"] = None
+        unit["session_end"] = None
+
+    # Queues
+    for k in queues.keys():
+        queues[k].clear()
+
+    # Lists
+    advance_bookings.clear()
+    expired_sessions.clear()
+
+    # Clock
+    set_time(OPEN_HOUR * 60)
