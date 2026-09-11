@@ -9,15 +9,6 @@
 OPEN_HOUR  = 10   # 10:00
 CLOSE_HOUR = 22   # 22:00
 
-# ── Hourly rates (Rs) per station type ───────────────────────────────────────
-RATES: dict[str, int] = {
-    "PS3":              50,
-    "PS4":              70,
-    "PS5":             100,
-    "RACING SIMULATOR": 120,
-    "ARCADE":           60,
-}
-
 # ── Station type display labels (for menus) ───────────────────────────────────
 STATION_LABELS: dict[int, str] = {
     1: "PS3",
@@ -27,13 +18,111 @@ STATION_LABELS: dict[int, str] = {
     5: "ARCADE",
 }
 
-# ── Station max capacities ────────────────────────────────────────────────────
-STATION_CAPACITIES: dict[str, int] = {
-    "PS3": 4,
-    "PS4": 4,
-    "PS5": 4,
-    "RACING SIMULATOR": 1,
-    "ARCADE": 2,
+# ── Dynamic Pricing & Game Catalog ────────────────────────────────────────────
+# Structure:
+# STATION_TYPE -> Game Name -> { type, max_players, pricing }
+# pricing maps player_count to hourly rate in Rs.
+GAMES_CATALOG: dict[str, dict[str, dict]] = {
+    "PS5": {
+        "EA FC 24": {
+            "type": "Premium",
+            "max_players": 4,
+            "pricing": {1: 150, 2: 180, 3: 200, 4: 220}
+        },
+        "Spider-Man 2": {
+            "type": "Premium",
+            "max_players": 1,
+            "pricing": {1: 160}
+        },
+        "Mortal Kombat 1": {
+            "type": "Normal",
+            "max_players": 2,
+            "pricing": {1: 120, 2: 150}
+        },
+        "Call of Duty: MW III": {
+            "type": "Premium",
+            "max_players": 2,
+            "pricing": {1: 140, 2: 180}
+        },
+        "Astro's Playroom": {
+            "type": "Normal",
+            "max_players": 1,
+            "pricing": {1: 100}
+        }
+    },
+    "PS4": {
+        "FIFA 23": {
+            "type": "Normal",
+            "max_players": 4,
+            "pricing": {1: 100, 2: 130, 3: 150, 4: 170}
+        },
+        "God of War": {
+            "type": "Premium",
+            "max_players": 1,
+            "pricing": {1: 120}
+        },
+        "Tekken 7": {
+            "type": "Normal",
+            "max_players": 2,
+            "pricing": {1: 90, 2: 120}
+        },
+        "Minecraft": {
+            "type": "Normal",
+            "max_players": 4,
+            "pricing": {1: 80, 2: 110, 3: 130, 4: 150}
+        }
+    },
+    "PS3": {
+        "GTA V": {
+            "type": "Premium",
+            "max_players": 1,
+            "pricing": {1: 80}
+        },
+        "Call of Duty: BO2": {
+            "type": "Normal",
+            "max_players": 4,
+            "pricing": {1: 60, 2: 80, 3: 100, 4: 120}
+        },
+        "Blur": {
+            "type": "Normal",
+            "max_players": 4,
+            "pricing": {1: 60, 2: 80, 3: 100, 4: 120}
+        }
+    },
+    "RACING SIMULATOR": {
+        "Gran Turismo 7": {
+            "type": "Premium",
+            "max_players": 1,
+            "pricing": {1: 200}
+        },
+        "F1 23": {
+            "type": "Premium",
+            "max_players": 1,
+            "pricing": {1: 220}
+        },
+        "Dirt Rally 2.0": {
+            "type": "Normal",
+            "max_players": 1,
+            "pricing": {1: 150}
+        }
+    },
+    "ARCADE": {
+        "Street Fighter II": {
+            "type": "Normal",
+            "max_players": 2,
+            "pricing": {1: 50, 2: 80}
+        },
+        "Pac-Man": {
+            "type": "Normal",
+            "max_players": 2,
+            "pricing": {1: 40, 2: 60}
+        },
+        "Metal Slug": {
+            "type": "Premium",
+            "max_players": 2,
+            "pricing": {1: 60, 2: 90}
+        }
+    }
 }
 
 # ── Snack / drink menu (Rs) ───────────────────────────────────────────────────
@@ -50,17 +139,6 @@ MENU_LABELS: dict[int, str] = {
     2: "CHIPS",
     3: "COFFEE",
     4: "SANDWICH",
-}
-
-# ── Game-category surcharge ───────────────────────────────────────────────────
-GAME_SURCHARGE: dict[str, int] = {
-    "AAA":      100,
-    "STANDARD":   0,
-}
-
-GAME_CATEGORY_LABELS: dict[int, str] = {
-    1: "AAA",
-    2: "STANDARD",
 }
 
 # ── Physical station units ────────────────────────────────────────────────────
@@ -97,7 +175,7 @@ stations: dict[int, dict] = {
 
 # ── Walk-in waiting queues ────────────────────────────────────────────────────
 # Maps station type -> FIFO list of customer names
-queues: dict[str, list[str]] = {key: [] for key in RATES}
+queues: dict[str, list[str]] = {key: [] for key in GAMES_CATALOG}
 
 # ── Advance bookings not yet started ─────────────────────────────────────────
 # List of booking dicts, kept sorted by scheduled_start ascending.

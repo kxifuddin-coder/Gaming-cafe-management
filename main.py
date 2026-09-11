@@ -3,14 +3,14 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 from data import (
-    RATES, MENU, MENU_LABELS, GAME_SURCHARGE, stations, queues,
-    advance_bookings, loyalty_hours, STATION_CAPACITIES, expired_sessions,
+    GAMES_CATALOG, MENU, MENU_LABELS, stations, queues,
+    advance_bookings, loyalty_hours, expired_sessions,
     get_time, fmt_time,
     OPEN_HOUR, CLOSE_HOUR,
 )
 from inputs import (
     get_customer_name, get_booking_type, get_station_type,
-    get_game_category, get_duration, get_player_count,
+    get_game_choice, get_duration, get_player_count,
     get_snack_order, get_scheduled_start, get_skip_minutes,
 )
 from logic import (
@@ -19,8 +19,7 @@ from logic import (
     release_station, serve_next_in_queue,
     register_advance_booking, activate_due_bookings,
     skip_time,
-    calculate_gaming_charge, calculate_game_surcharge,
-    calculate_food_total, apply_loyalty_discount,
+    calculate_gaming_charge, calculate_food_total, apply_loyalty_discount,
     add_loyalty_hours, print_bill,
 )
 
@@ -110,10 +109,10 @@ def run_new_customer() -> None:
     # ── Core inputs ───────────────────────────────────────────────────────────
     customer_name  = get_customer_name()
     booking_type   = get_booking_type()
-    station_type   = get_station_type(RATES)
-    game_category  = get_game_category(GAME_SURCHARGE)
+    station_type   = get_station_type(GAMES_CATALOG)
+    game_choice    = get_game_choice(station_type, GAMES_CATALOG)
     duration_hrs   = get_duration()
-    player_count   = get_player_count()
+    total_players  = get_player_count()
     duration_min   = duration_hrs * 60
 
     # ── Start time ────────────────────────────────────────────────────────────
@@ -129,27 +128,17 @@ def run_new_customer() -> None:
     else:
         scheduled_start = now
 
-    booking = {
-        "customer_name":   customer_name,
-        "station_type":    station_type,
-        "game_category":   game_category,
-        "duration_hrs":    duration_hrs,
-        "player_count":    player_count,
-        "scheduled_start": scheduled_start,
-        "snacks":          [],
-    }
-
     import math
-    # ── Availability check ────────────────────────────────────────────────────
-    capacity = STATION_CAPACITIES.get(station_type, 4)
-    units_needed = math.ceil(player_count / capacity)
+    game_info = GAMES_CATALOG[station_type][game_choice]
+    capacity = game_info["max_players"]
+    units_needed = math.ceil(total_players / capacity)
     available_units = get_available_units(station_type, scheduled_start, duration_min)
 
     units_to_book = 0
 
-    if player_count > capacity:
+    if total_players > capacity:
         if len(available_units) >= units_needed:
-            print(f"\n  ! {station_type} supports only {capacity} people per unit.")
+            print(f"\n  ! {game_choice} supports only {capacity} people per unit.")
             print(f"  {len(available_units)} units are available. You need {units_needed} units.")
             while True:
                 ans = input(f"  [B]ook {units_needed} units, [W]ait in queue, or [C]ancel? ").strip().upper()
@@ -163,7 +152,7 @@ def run_new_customer() -> None:
             else:
                 return
         elif len(available_units) > 0:
-            print(f"\n  ! {station_type} supports only {capacity} people per unit.")
+            print(f"\n  ! {game_choice} supports only {capacity} people per unit.")
             print(f"  Only {len(available_units)} unit(s) available.")
             max_people = len(available_units) * capacity
             while True:
@@ -171,7 +160,7 @@ def run_new_customer() -> None:
                 if ans in ("P", "W", "C"): break
             if ans == "P":
                 units_to_book = len(available_units)
-                booking["player_count"] = max_people
+                total_players = max_people
             elif ans == "W":
                 position = add_to_queue(customer_name, station_type)
                 print(f"  {customer_name} added to the waiting queue — position {position}.")
@@ -200,18 +189,28 @@ def run_new_customer() -> None:
     import uuid
     group_id = str(uuid.uuid4())
     
-    for uid in available_units[:units_to_book]:
-        b = dict(booking)
-        b["snacks"] = []
-        b["unit_id"] = uid
-        b["group_id"] = group_id
+    # Split players evenly
+    players_per_unit = [total_players // units_to_book + (1 if i < total_players % units_to_book else 0) for i in range(units_to_book)]
+    
+    for i, uid in enumerate(available_units[:units_to_book]):
+        b = {
+            "customer_name":   customer_name,
+            "station_type":    station_type,
+            "game_name":       game_choice,
+            "duration_hrs":    duration_hrs,
+            "player_count":    players_per_unit[i],
+            "scheduled_start": scheduled_start,
+            "snacks":          [],
+            "unit_id":         uid,
+            "group_id":        group_id,
+        }
         
         if booking_type == "B":
             register_advance_booking(b)
-            print(f"  ✓ Advance booking confirmed: {customer_name} → {station_type} unit {uid}")
+            print(f"  ✓ Advance booking confirmed: {customer_name} → {station_type} unit {uid} ({b['player_count']}P)")
         else:
             allocate_station(uid, b)
-            print(f"  ✓ Walk-in allocated: {customer_name} → {station_type} unit {uid}")
+            print(f"  ✓ Walk-in allocated: {customer_name} → {station_type} unit {uid} ({b['player_count']}P)")
 
     if booking_type != "B":
         print(f"  Start : {fmt_time(scheduled_start)}   End : {fmt_time(int(scheduled_start + duration_min))}")
@@ -281,7 +280,6 @@ def end_session() -> None:
     new_snacks = get_snack_order(MENU, MENU_LABELS)
 
     total_gaming_charge = 0.0
-    total_surcharge = 0.0
     all_food_items = list(new_snacks)
     max_dur_min = 0.0
     
@@ -295,14 +293,13 @@ def end_session() -> None:
         max_dur_min = max(max_dur_min, actual_dur_min)
         station_types.add(b["station_type"])
 
-        total_gaming_charge += calculate_gaming_charge(b["station_type"], actual_dur_min)
-        total_surcharge += calculate_game_surcharge(b["game_category"])
+        total_gaming_charge += calculate_gaming_charge(b["station_type"], b["game_name"], b["player_count"], actual_dur_min)
         all_food_items.extend(b.get("snacks", []))
 
         release_station(uid)
 
     food_total = calculate_food_total(all_food_items)
-    subtotal = total_gaming_charge + total_surcharge + food_total
+    subtotal = total_gaming_charge + food_total
 
     discounted = apply_loyalty_discount(customer_name, subtotal)
     discount_amt = subtotal - discounted
@@ -318,7 +315,7 @@ def end_session() -> None:
         station_type   = station_type_str,
         duration_min   = max_dur_min,
         gaming_charge  = total_gaming_charge,
-        surcharge      = total_surcharge,
+        surcharge      = 0.0,
         food_items     = all_food_items,
         food_total     = food_total,
         discount       = discount_amt,
@@ -392,7 +389,6 @@ def bill_expired_session() -> None:
     new_snacks = get_snack_order(MENU, MENU_LABELS)
 
     total_gaming_charge = 0.0
-    total_surcharge = 0.0
     all_food_items = list(new_snacks)
     max_dur_min = 0.0
     station_types = set()
@@ -402,12 +398,11 @@ def bill_expired_session() -> None:
         max_dur_min = max(max_dur_min, actual_dur_min)
         station_types.add(b["station_type"])
 
-        total_gaming_charge += calculate_gaming_charge(b["station_type"], actual_dur_min)
-        total_surcharge += calculate_game_surcharge(b["game_category"])
+        total_gaming_charge += calculate_gaming_charge(b["station_type"], b["game_name"], b["player_count"], actual_dur_min)
         all_food_items.extend(b.get("snacks", []))
 
     food_total = calculate_food_total(all_food_items)
-    subtotal = total_gaming_charge + total_surcharge + food_total
+    subtotal = total_gaming_charge + food_total
 
     discounted = apply_loyalty_discount(customer_name, subtotal)
     discount_amt = subtotal - discounted
@@ -423,7 +418,7 @@ def bill_expired_session() -> None:
         station_type   = station_type_str,
         duration_min   = max_dur_min,
         gaming_charge  = total_gaming_charge,
-        surcharge      = total_surcharge,
+        surcharge      = 0.0,
         food_items     = all_food_items,
         food_total     = food_total,
         discount       = discount_amt,

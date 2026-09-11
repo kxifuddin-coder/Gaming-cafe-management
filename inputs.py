@@ -58,18 +58,15 @@ def get_booking_type() -> str:
 
 # ── Station type ──────────────────────────────────────────────────────────────
 
-def get_station_type(rates: dict) -> str:
+def get_station_type(games_catalog: dict) -> str:
     """
     Show a numbered list of station types and return the chosen key.
-    *rates* is RATES from data.py (dict mapping type-key -> hourly rate),
-    passed in so inputs.py stays free of data.py imports.
     """
-    # Build ordered list from the rates dict so order matches data.py definition
-    options = list(rates.keys())
+    options = list(games_catalog.keys())
     print()
     print("  Station type:")
     for i, key in enumerate(options, 1):
-        print(f"    {i}. {key}  (Rs {rates[key]}/hr)")
+        print(f"    {i}. {key}")
     while True:
         raw = _read(f"  Select [1-{len(options)}] : ")
         if raw.isdigit() and 1 <= int(raw) <= len(options):
@@ -77,19 +74,22 @@ def get_station_type(rates: dict) -> str:
         print(f"  ! Please enter a number between 1 and {len(options)}.")
 
 
-# ── Game category ─────────────────────────────────────────────────────────────
+# ── Game choice ───────────────────────────────────────────────────────────────
 
-def get_game_category(surcharges: dict) -> str:
+def get_game_choice(station_type: str, games_catalog: dict) -> str:
     """
-    Show numbered game-category menu and return 'AAA' or 'STANDARD'.
-    *surcharges* is GAME_SURCHARGE from data.py.
+    Show numbered games list for the selected station and return the chosen game name.
     """
-    options = list(surcharges.keys())
+    station_games = games_catalog[station_type]
+    options = list(station_games.keys())
     print()
-    print("  Game category:")
+    print(f"  Available games for {station_type}:")
     for i, key in enumerate(options, 1):
-        note = f"  (+Rs {surcharges[key]} surcharge)" if surcharges[key] > 0 else "  (no surcharge)"
-        print(f"    {i}. {key}{note}")
+        game = station_games[key]
+        g_type = game["type"]
+        p_info = ", ".join(f"{p}P: Rs {rate}/hr" for p, rate in game["pricing"].items())
+        print(f"    {i}. {key} [{g_type}] - {p_info}")
+        
     while True:
         raw = _read(f"  Select [1-{len(options)}] : ")
         if raw.isdigit() and 1 <= int(raw) <= len(options):

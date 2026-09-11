@@ -8,7 +8,7 @@
 import math
 from data import (
     stations, queues, advance_bookings, loyalty_hours,
-    RATES, MENU, GAME_SURCHARGE, expired_sessions,
+   MENU, expired_sessions,
     get_time, set_time, advance_time, fmt_time,
     OPEN_HOUR, CLOSE_HOUR,
 )
@@ -219,18 +219,23 @@ def skip_time(minutes: int) -> None:
 # 7.  Billing calculations
 # ─────────────────────────────────────────────────────────────────────────────
 
-def calculate_gaming_charge(station_type: str, duration_minutes: float) -> float:
+def calculate_gaming_charge(station_type: str, game_name: str, player_count: int, duration_minutes: float) -> float:
     """
     Gaming charge = hourly_rate × (duration_minutes / 60), rounded up.
-    Raises KeyError if station_type is not in RATES.
+    The hourly_rate depends on the game and the number of players.
     """
-    rate = RATES[station_type]
+    from data import GAMES_CATALOG
+    
+    game_info = GAMES_CATALOG[station_type][game_name]
+    pricing = game_info["pricing"]
+    
+    if player_count in pricing:
+        rate = pricing[player_count]
+    else:
+        max_tier = max(pricing.keys())
+        rate = pricing[max_tier]
+        
     return math.ceil(rate * (duration_minutes / 60))
-
-
-def calculate_game_surcharge(game_category: str) -> float:
-    """Return Rs 100 for AAA, Rs 0 for STANDARD."""
-    return GAME_SURCHARGE.get(game_category.upper(), 0)
 
 
 def calculate_food_total(items: list[tuple[str, int]]) -> float:
