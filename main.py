@@ -76,7 +76,7 @@ def display_main_menu() -> str:
     print()
     print("  ── Main menu ──────────────────────────────")
     print("    1. New customer (booking or walk-in)")
-    print("    2. End active session & print bill")
+    print("    2. End session / Remove queue / Cancel booking")
     print("    3. Skip time (advance virtual clock)")
     print("    4. Add snacks to active session")
     print("    5. View expired sessions & print bills")
@@ -181,8 +181,12 @@ def run_new_customer() -> None:
             units_to_book = 1
         else:
             print(f"\n  ! No {station_type} available right now.")
-            position = add_to_queue(customer_name, station_type)
-            print(f"  {customer_name} added to the waiting queue — position {position}.")
+            while True:
+                ans = input("  [W]ait in queue or [C]ancel? ").strip().upper()
+                if ans in ("W", "C"): break
+            if ans == "W":
+                position = add_to_queue(customer_name, station_type)
+                print(f"  {customer_name} added to the waiting queue — position {position}.")
             return
 
     # ── Allocate ──────────────────────────────────────────────────────────────
@@ -246,6 +250,102 @@ def _select_occupied_unit() -> int | None:
             return uid_list[int(raw) - 1]
         print(f"  ! Please enter a number between 1 and {len(uid_list)}.")
 
+
+def remove_from_queue() -> None:
+    _header("Remove Customer from Queue")
+    
+    # Filter queues that have customers
+    active_queues = {k: v for k, v in queues.items() if v}
+    
+    if not active_queues:
+        print("\n  ! All waiting queues are currently empty.")
+        return
+    
+    print("\n  Active Queues:")
+    queue_keys = list(active_queues.keys())
+    for i, stype in enumerate(queue_keys, 1):
+        print(f"    {i}. {stype} ({len(active_queues[stype])} waiting)")
+    
+    while True:
+        q_raw = input(f"  Select station type [1-{len(queue_keys)}] : ").strip()
+        if q_raw.isdigit() and 1 <= int(q_raw) <= len(queue_keys):
+            selected_stype = queue_keys[int(q_raw) - 1]
+            break
+        print(f"  ! Please enter a number between 1 and {len(queue_keys)}.")
+    
+    customers = active_queues[selected_stype]
+    print(f"\n  Customers waiting for {selected_stype}:")
+    for i, cust in enumerate(customers, 1):
+        print(f"    {i}. {cust}")
+    
+    while True:
+        c_raw = input(f"  Select customer to remove [1-{len(customers)}] : ").strip()
+        if c_raw.isdigit() and 1 <= int(c_raw) <= len(customers):
+            idx = int(c_raw) - 1
+            break
+        print(f"  ! Please enter a number between 1 and {len(customers)}.")
+    
+    removed = queues[selected_stype].pop(idx)
+    print(f"\n  ✓ Removed '{removed}' from the {selected_stype} queue.")
+
+def cancel_advance_booking() -> None:
+    _header("Cancel Advance Booking")
+    if not advance_bookings:
+        print("\n  ! No advance bookings currently scheduled.")
+        return
+
+    print("\n  Scheduled Advance Bookings:")
+    for i, bk in enumerate(advance_bookings, 1):
+        cust = bk["customer_name"]
+        uid = bk["unit_id"]
+        stype = bk["station_type"]
+        start = fmt_time(int(bk["scheduled_start"]))
+        print(f"    {i}. Unit {uid} | {stype:<16} | {cust} (starts at {start})")
+
+    while True:
+        raw = input(f"  Select booking to cancel [1-{len(advance_bookings)}] (or [C]ancel) : ").strip().upper()
+        if raw == "C":
+            return
+        if raw.isdigit() and 1 <= int(raw) <= len(advance_bookings):
+            idx = int(raw) - 1
+            break
+        print(f"  ! Please enter a number between 1 and {len(advance_bookings)} or 'C'.")
+
+    bk_to_cancel = advance_bookings[idx]
+    group_id = bk_to_cancel.get("group_id")
+    
+    bks_to_remove = [bk_to_cancel]
+    
+    if group_id:
+        group_bks = [b for b in advance_bookings if b.get("group_id") == group_id and b != bk_to_cancel]
+        if group_bks:
+            ans = input(f"  This booking is part of a group ({len(group_bks) + 1} units). Cancel entire group? [Y/N] : ").strip().upper()
+            if ans == "Y":
+                bks_to_remove.extend(group_bks)
+                
+    for b in bks_to_remove:
+        advance_bookings.remove(b)
+        
+    print(f"\n  ✓ Successfully canceled {len(bks_to_remove)} advance booking(s) for {bk_to_cancel['customer_name']}.")
+
+def handle_option_2() -> None:
+    _header("Manage Sessions / Queues / Bookings")
+    print("  1. End active session")
+    print("  2. Remove customer from queue")
+    print("  3. Cancel advance booking")
+    while True:
+        ans = input("  Select [1-3] : ").strip()
+        if ans == "1":
+            end_session()
+            break
+        elif ans == "2":
+            remove_from_queue()
+            break
+        elif ans == "3":
+            cancel_advance_booking()
+            break
+        else:
+            print("  ! Invalid option. Please enter 1, 2, or 3.")
 
 def end_session() -> None:
     """
@@ -481,7 +581,7 @@ def main() -> None:
         if choice == "1":
             run_new_customer()
         elif choice == "2":
-            end_session()
+            handle_option_2()
         elif choice == "3":
             handle_skip_time()
         elif choice == "4":
