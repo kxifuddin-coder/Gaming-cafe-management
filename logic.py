@@ -60,13 +60,7 @@ def get_available_units(station_type: str, start_min: int, duration_min: float) 
             available.append(uid)
     return available
 
-def check_availability(station_type: str, start_min: int, duration_min: float) -> int | None:
-    """
-    Find a free unit of *station_type* for the window [start_min, start_min + duration_min].
-    Returns the unit_id of the first free unit found, or None if all are occupied.
-    """
-    units = get_available_units(station_type, start_min, duration_min)
-    return units[0] if units else None
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -137,12 +131,7 @@ def add_to_queue(customer_name: str, station_type: str) -> int:
     return len(queues[station_type])
 
 
-def serve_next_in_queue(station_type: str) -> None:
-    """
-    Helper function (if used) to find next free station and allocate.
-    Now just tells the operator to handle it.
-    """
-    pass
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────

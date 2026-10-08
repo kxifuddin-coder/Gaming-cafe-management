@@ -15,8 +15,8 @@ from inputs import (
 )
 from logic import (
     is_cafe_open,
-    check_availability, get_available_units, allocate_station, add_to_queue,
-    release_station, serve_next_in_queue,
+    get_available_units, allocate_station, add_to_queue,
+    release_station,
     register_advance_booking, activate_due_bookings,
     skip_time,
     calculate_gaming_charge, calculate_food_total, apply_loyalty_discount,
